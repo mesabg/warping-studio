@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Warping Studio</title>
+    <link rel="icon" href="data:," />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="control-rail">
+        <div class="brand">
+          <p class="eyebrow">Computer Vision + Graphics</p>
+          <h1>Warping Studio</h1>
+          <p class="lede">
+            Baseline scaffold for 2D feature morphing plus hybrid 3D OBJ rendering with direct mesh interpolation when topology matches and voxel fallback otherwise.
+          </p>
+        </div>
+
+        <section class="panel stack">
+          <div class="tabs" role="tablist" aria-label="Data mode">
+            <button class="tab is-active" data-mode-tab="image" type="button">2D Images</button>
+            <button class="tab" data-mode-tab="obj" type="button">3D OBJ</button>
+          </div>
+
+          <div class="field-grid two-up">
+            <label class="field">
+              <span>Source A</span>
+              <input id="sourceFile" type="file" accept="image/*" />
+            </label>
+            <label class="field">
+              <span>Destination B</span>
+              <input id="destinationFile" type="file" accept="image/*" />
+            </label>
+          </div>
+          <div class="file-pills">
+            <span class="file-pill" id="sourceFileLabel">No source asset</span>
+            <span class="file-pill" id="destinationFileLabel">No destination asset</span>
+          </div>
+        </section>
+
+        <section class="panel stack">
+          <div class="panel-heading">
+            <h2>Morph Controls</h2>
+            <span class="mono" id="sliderReadout">t = 0.50</span>
+          </div>
+
+          <label class="field">
+            <span>Time Parameter</span>
+            <input id="morphSlider" type="range" min="0" max="1" step="0.01" value="0.5" />
+          </label>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>Warping Algorithm</span>
+              <select id="warpMode">
+                <option value="mesh">Mesh Warping (Delaunay)</option>
+                <option value="tps">Thin-Plate Splines</option>
+                <option value="field">Field Morphing (Beier-Neely)</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Interpolation</span>
+              <select id="interpolationMode">
+                <option value="nearest">Nearest Neighbor</option>
+                <option value="bilinear" selected>Bilinear</option>
+                <option value="bicubic">Bicubic</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Annotation Mode</span>
+              <select id="annotationMode">
+                <option value="points" selected>Corresponding Points</option>
+                <option value="lines">Directed Feature Lines</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Voxel Resolution</span>
+              <input id="voxelResolution" type="range" min="16" max="40" step="2" value="24" />
+            </label>
+          </div>
+
+          <div class="annotation-guide">
+            <div class="panel-heading compact">
+              <h3>Annotation Guide</h3>
+              <span class="mono" id="annotationStatus">No annotations yet</span>
+            </div>
+            <p class="status-copy" id="annotationHelp">
+              Click matching points on Source and Destination to start morphing.
+            </p>
+            <p class="status-copy" id="annotationDeleteHelp">
+              Use Undo Last Pair to remove the latest matched annotation, or Clear Annotations to reset everything.
+            </p>
+          </div>
+
+          <div class="button-row">
+            <button id="undoAnnotation" class="btn" type="button">Undo Last Pair</button>
+            <button id="clearAnnotations" class="btn" type="button">Clear Annotations</button>
+            <button id="exportVideo" class="btn accent" type="button">Export to Video</button>
+          </div>
+        </section>
+
+        <section class="panel stack">
+          <div class="panel-heading">
+            <h2>Runtime</h2>
+            <div class="header-actions">
+              <span class="mono" id="voxelReadout">24^3 voxels</span>
+              <button id="openReport" class="btn subtle" type="button">Open Report</button>
+            </div>
+          </div>
+          <div class="status-list">
+            <div class="status-item">
+              <span>OpenCV.js</span>
+              <strong id="opencvStatus">Loading…</strong>
+            </div>
+            <div class="status-item">
+              <span>Renderer</span>
+              <strong id="webgpuStatus">CPU Active</strong>
+            </div>
+            <div class="status-item">
+              <span>Process</span>
+              <strong id="processStatus">Cross-dissolve baseline</strong>
+            </div>
+            <div class="status-item">
+              <span>Backend</span>
+              <strong id="backendDetail">Waiting for assets</strong>
+            </div>
+            <div class="status-item">
+              <span>Annotations</span>
+              <strong id="pairStatus">0 points / 0 lines</strong>
+            </div>
+            <div class="status-item">
+              <span>Export</span>
+              <strong id="exportStatus">Ready when a result is visible</strong>
+            </div>
+            <div class="status-item">
+              <span>Mode</span>
+              <strong id="modeStatus">Image Morph</strong>
+            </div>
+          </div>
+          <p class="status-copy" id="pipelineStatus">
+            Active pipeline details will appear here when assets and correspondences are available.
+          </p>
+          <p class="status-copy" id="appStatus">
+            Load two images or two OBJ files to start. CPU rendering stays active whenever GPU acceleration is unavailable.
+          </p>
+        </section>
+      </aside>
+
+      <main class="stage">
+        <header class="stage-header">
+          <div>
+            <p class="eyebrow">Workspace</p>
+            <h2>Morph Timeline Lab</h2>
+          </div>
+          <div class="legend">
+            <span><i class="legend-chip source"></i> Source A</span>
+            <span><i class="legend-chip destination"></i> Destination B</span>
+            <span><i class="legend-chip result"></i> Result</span>
+          </div>
+        </header>
+
+        <section class="workspace">
+          <article class="viewport-card">
+            <div class="viewport-head">
+              <div>
+                <p class="eyebrow">A</p>
+                <h3>Source</h3>
+              </div>
+              <span class="mono" id="sourceMeta">Awaiting input</span>
+            </div>
+            <canvas id="sourceCanvas" width="640" height="480" aria-label="Source viewport"></canvas>
+            <p class="viewport-note">Click to place points or line endpoints on the source asset.</p>
+          </article>
+
+          <article class="viewport-card">
+            <div class="viewport-head">
+              <div>
+                <p class="eyebrow">B</p>
+                <h3>Destination</h3>
+              </div>
+              <span class="mono" id="destinationMeta">Awaiting input</span>
+            </div>
+            <canvas id="destinationCanvas" width="640" height="480" aria-label="Destination viewport"></canvas>
+            <p class="viewport-note">Mirror the same annotations here to pair corresponding structures.</p>
+          </article>
+
+          <article class="viewport-card">
+            <div class="viewport-head">
+              <div>
+                <p class="eyebrow">Morph</p>
+                <h3>Result</h3>
+              </div>
+              <span class="mono" id="resultMeta">Blend preview</span>
+            </div>
+            <div class="result-stack">
+              <canvas id="resultCanvas2d" width="640" height="480" aria-label="Result viewport fallback"></canvas>
+              <canvas id="resultCanvasGpu" width="640" height="480" aria-label="Result viewport WebGPU"></canvas>
+              <canvas id="resultCanvasGl" width="640" height="480" aria-label="Result viewport WebGL2"></canvas>
+            </div>
+            <p class="viewport-note">Image mode prefers WebGPU, falls back to WebGL2 when available, and otherwise stays on CPU. OBJ mode prefers direct mesh interpolation for compatible meshes and falls back to voxel blending when topology diverges.</p>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
