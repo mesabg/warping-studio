@@ -313,7 +313,9 @@ class WebGLBlender {
     const gl = this.gl;
     gl.activeTexture(textureUnit);
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    // The quad UVs already account for canvas coordinates, so flipping again
+    // in WebGL inverts the visible result on fallback browsers.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
   }
 
@@ -383,6 +385,7 @@ const dom = {
   sourceMeta: document.getElementById('sourceMeta'),
   tabs: [...document.querySelectorAll('[data-mode-tab]')],
   undoAnnotation: document.getElementById('undoAnnotation'),
+  voxelHelp: document.getElementById('voxelHelp'),
   voxelReadout: document.getElementById('voxelReadout'),
   voxelResolution: document.getElementById('voxelResolution'),
   warpMode: document.getElementById('warpMode'),
@@ -574,9 +577,19 @@ function setStatus(message) {
   dom.appStatus.textContent = message;
 }
 
+function getVoxelHelpText() {
+  const detail =
+    'Voxel Resolution controls the density of the OBJ voxel fallback grid. Higher values produce fuller previews for incompatible meshes, but increase CPU time and memory use.';
+  return state.mode === 'image' ? `${detail} It does not affect 2D image morphing.` : detail;
+}
+
 function updateReadouts() {
   dom.sliderReadout.textContent = `t = ${state.t.toFixed(2)}`;
-  dom.voxelReadout.textContent = `${state.voxelResolution}^3 voxels`;
+  dom.voxelReadout.textContent = `${state.voxelResolution}^3 OBJ voxels`;
+  if (dom.voxelHelp) {
+    dom.voxelHelp.textContent = getVoxelHelpText();
+  }
+  dom.voxelResolution.disabled = state.mode !== 'obj';
 
   if (state.mode === 'image') {
     const meta = morph2d.getMeta();
