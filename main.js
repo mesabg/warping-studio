@@ -33,9 +33,37 @@ void main() {
 }
 `;
 
+const SOFTWARE_RENDERER_PATTERN =
+  /(swiftshader|software|llvmpipe|softpipe|lavapipe|microsoft basic render|basic render driver)/i;
+
+function withTimeout(promise, timeoutMs, fallbackValue = null) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      window.setTimeout(() => resolve(fallbackValue), timeoutMs);
+    })
+  ]);
+}
+
+function isSoftwareRendererLabel(label) {
+  return Boolean(label && SOFTWARE_RENDERER_PATTERN.test(label));
+}
+
+function createValidationCanvas(width = 2, height = 2) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  return canvas;
+}
+
 class WebGPUBlender {
   constructor(canvas) {
     this.canvas = canvas;
+    this.adapter = null;
+    this.adapterLabel = '';
     this.context = null;
     this.device = null;
     this.pipeline = null;
@@ -47,31 +75,91 @@ class WebGPUBlender {
     this.ready = false;
   }
 
-  async initialize(timeoutMs = 1200) {
+  getAdapterLabel(adapter) {
+    const info = adapter?.info;
+    return [info?.vendor, info?.architecture, info?.device, info?.description]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+  }
+
+  async requestUsableAdapter(timeoutMs) {
+    const adapterRequests = [
+      { powerPreference: 'high-performance' },
+      { powerPreference: 'low-power' },
+      undefined
+    ];
+
+    for (const options of adapterRequests) {
+      let adapter = null;
+      try {
+        adapter = await withTimeout(navigator.gpu.requestAdapter(options), timeoutMs);
+      } catch {
+        adapter = null;
+      }
+
+      if (!adapter) {
+        continue;
+      }
+
+      const adapterLabel = this.getAdapterLabel(adapter);
+      const isFallback = typeof adapter.isFallbackAdapter === 'boolean' && adapter.isFallbackAdapter;
+      if (isFallback || isSoftwareRendererLabel(adapterLabel)) {
+        continue;
+      }
+
+      this.adapter = adapter;
+      this.adapterLabel = adapterLabel;
+      return adapter;
+    }
+
+    return null;
+  }
+
+  async validateRenderPath(timeoutMs) {
+    const probeCanvas = createValidationCanvas();
+    if (!this.render(probeCanvas, probeCanvas, 0.5, probeCanvas.width, probeCanvas.height)) {
+      return false;
+    }
+
+    if (typeof this.device?.queue?.onSubmittedWorkDone === 'function') {
+      try {
+        const didFinish = await withTimeout(
+          this.device.queue.onSubmittedWorkDone().then(() => true),
+          timeoutMs,
+          false
+        );
+        if (!didFinish) {
+          this.ready = false;
+          return false;
+        }
+      } catch {
+        this.ready = false;
+        return false;
+      }
+    }
+
+    return this.ready;
+  }
+
+  async initialize(timeoutMs = 2500) {
     if (!('gpu' in navigator)) {
       return false;
     }
 
     try {
-      const adapter = await Promise.race([
-        navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }),
-        new Promise((resolve) => {
-          window.setTimeout(() => resolve(null), timeoutMs);
-        })
-      ]);
+      const adapter = await this.requestUsableAdapter(timeoutMs);
       if (!adapter) {
         return false;
       }
 
-      this.device = await Promise.race([
-        adapter.requestDevice(),
-        new Promise((resolve) => {
-          window.setTimeout(() => resolve(null), timeoutMs);
-        })
-      ]);
+      this.device = await withTimeout(adapter.requestDevice(), timeoutMs);
       if (!this.device) {
         return false;
       }
+      this.device.lost.then(() => {
+        this.ready = false;
+      });
 
       this.context = this.canvas.getContext('webgpu');
       if (!this.context) {
@@ -111,7 +199,7 @@ class WebGPUBlender {
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
       });
       this.ready = true;
-      return true;
+      return await this.validateRenderPath(timeoutMs);
     } catch {
       this.ready = false;
       return false;
@@ -209,6 +297,7 @@ class WebGLBlender {
     this.sourceTexture = null;
     this.destinationTexture = null;
     this.tLocation = null;
+    this.rendererLabel = '';
     this.ready = false;
   }
 
@@ -220,6 +309,14 @@ class WebGLBlender {
         premultipliedAlpha: true
       });
       if (!gl) {
+        return false;
+      }
+
+      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+      this.rendererLabel = debugInfo
+        ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+        : gl.getParameter(gl.RENDERER);
+      if (isSoftwareRendererLabel(this.rendererLabel)) {
         return false;
       }
 
@@ -395,6 +492,7 @@ const dom = {
 const state = {
   activeResultCanvas: dom.resultCanvas2d,
   accelerationBackend: 'cpu',
+  accelerationProbeComplete: false,
   exporting: false,
   lastRenderSummary: null,
   mode: 'image',
@@ -420,6 +518,11 @@ const webgpuBlender = new WebGPUBlender(dom.resultCanvasGpu);
 const webglBlender = new WebGLBlender(dom.resultCanvasGl);
 
 function syncWebGpuStatus() {
+  if (state.mode === 'image' && !state.accelerationProbeComplete) {
+    dom.webgpuStatus.textContent = 'Probing...';
+    return;
+  }
+
   const labels = {
     cpu: 'CPU Active',
     webgl2: 'WebGL2 Active',
@@ -429,6 +532,10 @@ function syncWebGpuStatus() {
 }
 
 function getCurrentRendererLabel() {
+  if (state.mode === 'image' && !state.accelerationProbeComplete) {
+    return 'Probing...';
+  }
+
   const labels = {
     cpu: 'CPU Active',
     webgl2: 'WebGL2 Active',
@@ -440,7 +547,9 @@ function getCurrentRendererLabel() {
 function getImageRuntimeSummary() {
   const summary = morph2d.getRuntimeSummary(Boolean(state.opencv));
   const blendStage =
-    state.accelerationBackend === 'webgpu'
+    !state.accelerationProbeComplete
+      ? 'Renderer probe pending'
+      : state.accelerationBackend === 'webgpu'
       ? 'WebGPU blend compositor'
       : state.accelerationBackend === 'webgl2'
         ? 'WebGL2 blend compositor'
@@ -513,6 +622,17 @@ function buildReportData() {
   const objSummary = morph3d.getRuntimeSummary();
 
   return {
+    accelerationDiagnostics: {
+      active: state.accelerationBackend,
+      webgl2: {
+        ready: state.webglReady,
+        renderer: webglBlender.rendererLabel || 'Unavailable'
+      },
+      webgpu: {
+        adapter: webgpuBlender.adapterLabel || 'Unavailable',
+        ready: state.webgpuReady
+      }
+    },
     annotationMode: dom.annotationMode.value,
     exportStatus: runtime.exportStatus,
     interpolation: dom.interpolationMode.value,
@@ -940,6 +1060,7 @@ async function initialize() {
     webgpuBlender.initialize(),
     Promise.resolve().then(() => webglBlender.initialize())
   ]).then(async ([webgpuReady, webglReady]) => {
+    state.accelerationProbeComplete = true;
     state.webgpuReady = Boolean(webgpuReady);
     state.webglReady = Boolean(webglReady);
     await renderActiveMode();
@@ -967,6 +1088,7 @@ async function initialize() {
     getReportData: buildReportData,
     renderActiveMode,
     setAccelerationState({ webglReady = state.webglReady, webgpuReady = state.webgpuReady } = {}) {
+      state.accelerationProbeComplete = true;
       state.webglReady = Boolean(webglReady);
       state.webgpuReady = Boolean(webgpuReady);
       return renderActiveMode();
