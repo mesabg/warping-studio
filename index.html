@@ -204,17 +204,59 @@
                 <p class="eyebrow">Morph</p>
                 <h3>Result</h3>
               </div>
-              <span class="mono" id="resultMeta">Blend preview</span>
+              <div class="header-actions result-actions">
+                <span class="mono" id="resultMeta">Blend preview</span>
+                <button id="openResultOverlay" class="btn subtle" type="button">Full Window</button>
+              </div>
             </div>
-            <div class="result-stack">
-              <canvas id="resultCanvas2d" width="640" height="480" aria-label="Result viewport fallback"></canvas>
-              <canvas id="resultCanvasGpu" width="640" height="480" aria-label="Result viewport WebGPU"></canvas>
-              <canvas id="resultCanvasGl" width="640" height="480" aria-label="Result viewport WebGL2"></canvas>
+            <div class="result-stack-home" id="resultStackHome">
+              <div class="result-stack" id="resultStack">
+                <canvas id="resultCanvas2d" width="640" height="480" aria-label="Result viewport fallback"></canvas>
+                <canvas id="resultCanvasGpu" width="640" height="480" aria-label="Result viewport WebGPU"></canvas>
+                <canvas id="resultCanvasGl" width="640" height="480" aria-label="Result viewport WebGL2"></canvas>
+              </div>
             </div>
             <p class="viewport-note">Image mode prefers WebGPU, falls back to WebGL2 when available, and otherwise stays on CPU. OBJ mode prefers direct mesh interpolation for compatible meshes and falls back to voxel blending when topology diverges.</p>
           </article>
         </section>
       </main>
+    </div>
+
+    <div id="resultOverlay" class="result-overlay is-hidden" aria-hidden="true">
+      <section
+        class="result-overlay-shell"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resultOverlayTitle"
+      >
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Expanded Result</p>
+            <h2 id="resultOverlayTitle">Result Inspector</h2>
+          </div>
+          <div class="header-actions result-actions">
+            <span class="mono" id="resultOverlayMeta">Blend preview</span>
+            <button id="closeResultOverlay" class="btn subtle" type="button">Close</button>
+          </div>
+        </div>
+
+        <div class="result-overlay-stage" id="resultOverlayStage" aria-label="Expanded result viewport"></div>
+
+        <div class="result-overlay-controls">
+          <div class="panel-heading compact">
+            <h3>Interpolation</h3>
+            <span class="mono" id="resultOverlayReadout">50 / 100</span>
+          </div>
+          <label class="field">
+            <span>Blend Position</span>
+            <input id="resultOverlaySlider" type="range" min="0" max="100" step="1" value="50" />
+          </label>
+          <div class="overlay-scale-labels" aria-hidden="true">
+            <span>0</span>
+            <span>100</span>
+          </div>
+        </div>
+      </section>
     </div>
 
     <script type="module" src="/main.js"></script>

@@ -35,6 +35,7 @@ void main() {
 
 const SOFTWARE_RENDERER_PATTERN =
   /(swiftshader|software|llvmpipe|softpipe|lavapipe|microsoft basic render|basic render driver)/i;
+const OVERLAY_FOCUS_BG = [13, 18, 32];
 
 function withTimeout(promise, timeoutMs, fallbackValue = null) {
   return Promise.race([
@@ -467,14 +468,23 @@ const dom = {
   modeStatus: document.getElementById('modeStatus'),
   morphSlider: document.getElementById('morphSlider'),
   openReport: document.getElementById('openReport'),
+  openResultOverlay: document.getElementById('openResultOverlay'),
   opencvStatus: document.getElementById('opencvStatus'),
   pairStatus: document.getElementById('pairStatus'),
   pipelineStatus: document.getElementById('pipelineStatus'),
+  resultOverlay: document.getElementById('resultOverlay'),
+  resultOverlayClose: document.getElementById('closeResultOverlay'),
+  resultOverlayMeta: document.getElementById('resultOverlayMeta'),
+  resultOverlayReadout: document.getElementById('resultOverlayReadout'),
+  resultOverlaySlider: document.getElementById('resultOverlaySlider'),
+  resultOverlayStage: document.getElementById('resultOverlayStage'),
   processStatus: document.getElementById('processStatus'),
   resultCanvas2d: document.getElementById('resultCanvas2d'),
   resultCanvasGl: document.getElementById('resultCanvasGl'),
   resultCanvasGpu: document.getElementById('resultCanvasGpu'),
   resultMeta: document.getElementById('resultMeta'),
+  resultStack: document.getElementById('resultStack'),
+  resultStackHome: document.getElementById('resultStackHome'),
   sliderReadout: document.getElementById('sliderReadout'),
   sourceCanvas: document.getElementById('sourceCanvas'),
   sourceFile: document.getElementById('sourceFile'),
@@ -498,6 +508,8 @@ const state = {
   mode: 'image',
   opencv: null,
   opencvPromise: null,
+  overlayFocusOffsetX: 0,
+  resultOverlayOpen: false,
   t: Number(dom.morphSlider.value),
   voxelResolution: Number(dom.voxelResolution.value),
   webglReady: false,
@@ -704,12 +716,16 @@ function getVoxelHelpText() {
 }
 
 function updateReadouts() {
+  const overlayInterpolation = Math.round(state.t * 100);
   dom.sliderReadout.textContent = `t = ${state.t.toFixed(2)}`;
   dom.voxelReadout.textContent = `${state.voxelResolution}^3 OBJ voxels`;
   if (dom.voxelHelp) {
     dom.voxelHelp.textContent = getVoxelHelpText();
   }
   dom.voxelResolution.disabled = state.mode !== 'obj';
+  dom.resultOverlaySlider.value = String(overlayInterpolation);
+  dom.resultOverlayReadout.textContent = `${overlayInterpolation} / 100`;
+  dom.resultOverlayMeta.textContent = `${dom.resultMeta.textContent} | ${getCurrentRendererLabel()}`;
 
   if (state.mode === 'image') {
     const meta = morph2d.getMeta();
@@ -729,6 +745,99 @@ function updateReadouts() {
 
 function getActiveResultCanvas() {
   return state.activeResultCanvas;
+}
+
+function refreshResultOverlay() {
+  if (!state.resultOverlayOpen) {
+    return;
+  }
+
+  updateReadouts();
+  dom.resultStack.style.transform = `translateX(${state.overlayFocusOffsetX}px)`;
+}
+
+function openResultOverlay() {
+  state.resultOverlayOpen = true;
+  dom.resultOverlayStage.appendChild(dom.resultStack);
+  dom.resultOverlay.classList.remove('is-hidden');
+  dom.resultOverlay.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('has-overlay');
+  refreshResultOverlay();
+  dom.resultOverlayClose.focus();
+}
+
+function closeResultOverlay() {
+  state.resultOverlayOpen = false;
+  dom.resultStack.style.transform = '';
+  dom.resultStackHome.appendChild(dom.resultStack);
+  dom.resultOverlay.classList.add('is-hidden');
+  dom.resultOverlay.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('has-overlay');
+  dom.openResultOverlay.focus();
+}
+
+function computeCanvasContentBounds(canvas) {
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    return null;
+  }
+
+  const { width, height } = canvas;
+  const imageData = context.getImageData(0, 0, width, height);
+  const { data } = imageData;
+  let minX = width;
+  let maxX = -1;
+  let minY = height;
+  let maxY = -1;
+  const step = 2;
+
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const index = (y * width + x) * 4;
+      const alpha = data[index + 3];
+      if (alpha < 8) {
+        continue;
+      }
+
+      const distance =
+        Math.abs(data[index] - OVERLAY_FOCUS_BG[0]) +
+        Math.abs(data[index + 1] - OVERLAY_FOCUS_BG[1]) +
+        Math.abs(data[index + 2] - OVERLAY_FOCUS_BG[2]);
+
+      if (distance < 28) {
+        continue;
+      }
+
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
+
+  if (maxX < 0 || maxY < 0) {
+    return null;
+  }
+
+  return { maxX, maxY, minX, minY };
+}
+
+function updateOverlayFocusOffset() {
+  const bounds = computeCanvasContentBounds(dom.resultCanvas2d);
+  if (!bounds) {
+    state.overlayFocusOffsetX = 0;
+    return;
+  }
+
+  const canvasCenterX = dom.resultCanvas2d.width / 2;
+  const contentCenterX = (bounds.minX + bounds.maxX) / 2;
+  const normalizedOffset = (canvasCenterX - contentCenterX) / dom.resultCanvas2d.width;
+  const overlayWidth = dom.resultStack.getBoundingClientRect().width || 0;
+  const maxShift = overlayWidth * 0.08;
+  state.overlayFocusOffsetX = Math.max(
+    -maxShift,
+    Math.min(maxShift, normalizedOffset * overlayWidth)
+  );
 }
 
 function showResultCanvas(backend) {
@@ -774,6 +883,8 @@ async function renderActiveMode() {
       warpMode: dom.warpMode.value
     });
     const renderState = morph2d.render(state.opencv);
+    draw2dFallback(renderState.blendSource, renderState.blendDestination, state.t);
+    updateOverlayFocusOffset();
     let renderedWith = null;
 
     if (state.webgpuReady) {
@@ -807,7 +918,6 @@ async function renderActiveMode() {
     }
 
     if (!renderedWith) {
-      draw2dFallback(renderState.blendSource, renderState.blendDestination, state.t);
       renderedWith = 'cpu';
     }
 
@@ -821,6 +931,7 @@ async function renderActiveMode() {
       t: state.t
     });
     const renderState = morph3d.render();
+    updateOverlayFocusOffset();
     setAccelerationBackend('cpu');
     showResultCanvas('cpu');
     dom.resultMeta.textContent = renderState.warpSummary;
@@ -829,6 +940,7 @@ async function renderActiveMode() {
 
   updateRuntimePanel();
   persistReportSnapshot();
+  refreshResultOverlay();
 }
 
 async function loadAsset(slot, file) {
@@ -1013,6 +1125,11 @@ function bindEvents() {
     state.t = Number(event.target.value);
     await renderActiveMode();
   });
+  dom.resultOverlaySlider.addEventListener('input', async (event) => {
+    state.t = Number(event.target.value) / 100;
+    dom.morphSlider.value = String(state.t);
+    await renderActiveMode();
+  });
   dom.warpMode.addEventListener('change', renderActiveMode);
   dom.interpolationMode.addEventListener('change', renderActiveMode);
   dom.annotationMode.addEventListener('change', renderActiveMode);
@@ -1033,6 +1150,13 @@ function bindEvents() {
   });
   dom.exportVideo.addEventListener('click', exportVideo);
   dom.openReport.addEventListener('click', openReportPage);
+  dom.openResultOverlay.addEventListener('click', openResultOverlay);
+  dom.resultOverlayClose.addEventListener('click', closeResultOverlay);
+  dom.resultOverlay.addEventListener('click', (event) => {
+    if (event.target === dom.resultOverlay) {
+      closeResultOverlay();
+    }
+  });
 
   dom.sourceCanvas.addEventListener('click', async (event) => {
     if (state.mode !== 'image') {
@@ -1048,6 +1172,15 @@ function bindEvents() {
     }
     morph2d.registerPointer('destination', event);
     await renderActiveMode();
+  });
+
+  window.addEventListener('resize', () => {
+    refreshResultOverlay();
+  });
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.resultOverlayOpen) {
+      closeResultOverlay();
+    }
   });
 }
 
